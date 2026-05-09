@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Popoci Garden"/>
+  <meta name="theme-color" content="#2c5c3c"/>
+  <link rel="manifest" href="/manifest.json"/>
+  <title>Popoci Garden 🌿</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap"/>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+    html,body,#root{height:100%}
+    body{font-family:'DM Sans',sans-serif;overscroll-behavior:none;overflow-x:hidden}
+    ::-webkit-scrollbar{width:3px}
+    ::-webkit-scrollbar-thumb{background:rgba(100,140,100,0.25);border-radius:2px}
+    input,textarea{outline:none;font-family:inherit}
+    @keyframes slideUp{from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1}}
+    @keyframes toastIn{from{transform:translateY(40px);opacity:0}to{transform:translateY(0);opacity:1}}
+    @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+
+<script>
+  // Service Worker
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
+  // Firebase
+  const firebaseConfig = {
+    apiKey: "AIzaSyBh2t09QW8wy_0HW5GngQyxuT2rgeovclk",
+    authDomain: "popoci-garden.firebaseapp.com",
+    databaseURL: "https://popoci-garden-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "popoci-garden",
+    storageBucket: "popoci-garden.firebasestorage.app",
+    messagingSenderId: "182118084820",
+    appId: "1:182118084820:web:e88b12ab4f5d926db08b41"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+  db.enablePersistence().catch(() => {});
+</script>
+
+<script type="text/babel">
+const {useState, useEffect, useRef} = React;
+
+// ── THEME ─────────────────────────────────────────────────────────────────────
+const TH = {
+  light: {
+    bg:"#f4efe7", card:"#ffffff", card2:"#f9f5f0",
+    text:"#231a0f", sub:"#7a6350", border:"#e2d9cc",
+    accent:"#4e8c68", accentBg:"#e4f2eb", accentTxt:"#2d6045",
+    red:"#b83535", redBg:"#fce9e9",
+    amber:"#b07015", amberBg:"#fef4df",
+    green:"#1f8c5a", greenBg:"#e2f5ec",
+    nav:"#ffffff", navBorder:"#ede6d9",
+    header:"#2c5c3c", headerTxt:"#f4efe7",
+    dead:"#999", deadBg:"#f0ece8",
+    sick:"#9b4f20", sickBg:"#fceee4",
+    shadow:"rgba(35,26,15,0.09)",
+    inputBg:"#f9f5f0", inputBorder:"#d9d0c2",
+  },
+  dark: {
+    bg:"#0f1a12", card:"#182619", card2:"#132018",
+    text:"#ddeae2", sub:"#7a9a83", border:"#1f3226",
+    accent:"#5dc87c", accentBg:"#132a1a", accentTxt:"#5dc87c",
+    red:"#e07575", redBg:"#281515",
+    amber:"#e8b050", amberBg:"#221800",
+    green:"#52c47a", greenBg:"#0f2318",
+    nav:"#0f1a12", navBorder:"#192c1e",
+    header:"#09120a", headerTxt:"#ddeae2",
+    dead:"#555", deadBg:"#1a1f1a",
+    sick:"#e0956a", sickBg:"#251508",
+    shadow:"rgba(0,0,0,0.35)",
+    inputBg:"#132018", inputBorder:"#233428",
+  }
+};
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+const DAY = 86400000;
+const uid = () => Math.random().toString(36).slice(2, 10);
+const daysSince = d => !d ? 999 : Math.floor((Date.now() - new Date(d)) / DAY);
+const daysLeft = p => (p.freqDays || 7) - daysSince(p.lastWatered);
+
+function urgency(p) {
+  if (p.manualStatus === "dead") return "dead";
+  if (p.manualStatus === "sick") return "sick";
+  const dl = daysLeft(p);
+  if (dl < 0) return "overdue";
+  if (dl === 0) return "today";
+  if (dl === 1) return "soon";
+  return "ok";
+}
+function urgencyRank(p) { const m = {overdue:0,today:1,soon:2,sick:3,ok:4,dead:5}; return m[urgency(p)] ?? 4; }
+
+function statusLabel(p, t) {
+  const dl = daysLeft(p);
+  const map = {
+    overdue: {txt:`In ritardo di ${-dl} ${-dl===1?"giorno":"giorni"}`, color:t.red, bg:t.redBg},
+    today:   {txt:"Da annaffiare oggi!", color:t.amber, bg:t.amberBg},
+    soon:    {txt:"Domani", color:t.amber, bg:t.amberBg},
+    ok:      {txt:`Tra ${dl} giorni`, color:t.green, bg:t.greenBg},
+    sick:    {txt:"Malata 🤒", color:t.sick, bg:t.sickBg},
+    dead:    {txt:"Morta 💀", color:t.dead, bg:t.deadBg},
+  };
+  return map[urgency(p)] || map.ok;
+}
+
+const fmtS = d => !d ? "—" : new Date(d).toLocaleDateString("it-IT", {day:"numeric", month:"short"});
+
+const compressImage = file => new Promise(res => {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const MAX = 500;
+      let w = img.width, h = img.height;
+      if (w > MAX) { h = h * MAX / w; w = MAX; }
+      if (h > MAX) { w = w * MAX / h; h = MAX; }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      res(canvas.toDataURL("image/jpeg", 0.75));
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+const EMOJIS = ["🌿","🌱","🌳","🌲","🌵","🌴","🌾","🍀","☘️","🌺","🌸","🌹","🌼","🌻","🌷","🪷","🪴","🍃","🍂","🪻","🎋","🌰","🎍"];
+
+// ── NOTIFICHE ─────────────────────────────────────────────────────────────────
+const VAPID_PUBLIC_KEY = 'BP4c-QGIvdy_nGnT-V5hgRU80YYNg2ssx3QcmpktPnOFUfJAo8J_qfjj0IVNuHa9LU7cX51S1hwHCZp4NGj_vVE';
+const NOTIFY_URL = '/.netlify/functions/notify';
+
+function urlB64ToUint8(b64) {
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const raw = atob((b64 + pad).replace(/-/g,'+').replace(/_/g,'/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+async function subscribeNotifications(userId, userName) {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') return null;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlB64ToUint8(VAPID_PUBLIC_KEY)
+    });
+    const subId = btoa(sub.endpoint).slice(-16).replace(/[^a-zA-Z0-9]/g,'');
+    await db.collection('subscriptions').doc(subId).set({
+      endpoint: sub.endpoint,
+      p256dh: btoa(String.fromCharCode(...new Uint8Array(sub.getKey('p256dh')))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,''),
+      auth: btoa(String.fromCharCode(...new Uint8Array(sub.getKey('auth')))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,''),
+      userId, userName, updatedAt: new Date().toISOString()
+    });
+    return sub.endpoint;
+  } catch(e) { console.log('Notifiche non disponibili:', e.message); return null; }
+}
+
+// ── MINI COMPONENTS ───────────────────────────────────────────────────────────
+function PlantIcon({plant, size=64, style:sx}) {
+  if (plant && plant.customImg) {
+    return <img src={plant.customImg} alt={plant.name}
+      style={{width:size, height:size, borderRadius:size*0.2, objectFit:"cover", flexShrink:0, ...sx}}/>;
+  }
+  return <div style={{width:size, height:size, borderRadius:size*0.2, display:"flex", alignItems:"center",
+    justifyContent:"center", fontSize:size*0.55, flexShrink:0, ...sx}}>
+    {(plant && plant.emoji) || "🌿"}
+  </div>;
+}
+
+function Badge({txt, color, bg}) {
+  return <span style={{display:"inline-block", padding:"2px 8px", borderRadius:12, fontSize:11,
+    fontWeight:500, color, background:bg, whiteSpace:"nowrap"}}>{txt}</span>;
+}
+
+// ── APP ───────────────────────────────────────────────────────────────────────
+function App() {
+  const [themeName, setThemeName] = useState(() => localStorage.getItem("pg-theme") || "light");
+  const t = TH[themeName];
+  const [plants, setPlants] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [screen, setScreen] = useState("home");
+  const [selId, setSelId] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [notification, setNotification] = useState(null);
+  const [users, setUsers] = useState({u1:"Giacomo", u2:"Gino"});
+  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("pg-user") || "u1");
+  const [seasonal, setSeasonal] = useState(false);
+  const [sortBy, setSortBy] = useState("urgency");
+  const pushEndpointRef = useRef(null);
+
+  useEffect(() => { localStorage.setItem("pg-theme", themeName); }, [themeName]);
+  useEffect(() => { localStorage.setItem("pg-user", currentUser); }, [currentUser]);
+
+  // Subscribe to push notifications when user is known
+  useEffect(() => {
+    subscribeNotifications(currentUser, users[currentUser]).then(ep => {
+      pushEndpointRef.current = ep;
+    });
+  }, [currentUser]);
+
+  // Real-time plants
+  useEffect(() => {
+    const unsub = db.collection("plants").onSnapshot(snap => {
+      setPlants(snap.docs.map(doc => ({id: doc.id, ...doc.data()})));
+      setLoading(false);
+    }, () => setLoading(false));
+    return () => unsub();
+  }, []);
+
+  // Real-time settings
+  useEffect(() => {
+    const unsub = db.collection("config").doc("settings").onSnapshot(doc => {
+      if (doc.exists) {
+        const d = doc.data();
+        if (d.users) setUsers(d.users);
+        if (d.seasonal !== undefined) setSeasonal(d.seasonal);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const showToast = msg => { setToast(msg); setTimeout(() => setToast(null), 3000); };
+  const showNotif = msg => { setNotification(msg); setTimeout(() => setNotification(null), 5000); };
+  const selectedPlant = plants.find(p => p.id === selId) || null;
+
+  const waterPlant = async id => {
+    const p = plants.find(x => x.id === id);
+    if (!p) return;
+    const uname = users[currentUser] || currentUser;
+    const newHistory = [{date: new Date().toISOString(), uid: currentUser, uname}, ...(p.history || [])].slice(0, 50);
+    try {
+      await db.collection("plants").doc(id).update({
+        lastWatered: new Date().toISOString(),
+        lastWateredBy: currentUser,
+        lastWateredByName: uname,
+        history: newHistory,
+      });
+      showToast(`💧 ${p.name} annaffiata!`);
+      const other = currentUser === "u1" ? "u2" : "u1";
+      showNotif(`🔔 ${uname} ha annaffiato ${p.name}! (notifica a ${users[other]})`);
+      // Invia notifica push all'altro telefono
+      fetch(NOTIFY_URL, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          title: '🌿 Popoci Garden',
+          body: `${uname} ha annaffiato ${p.name}! 💧`,
+          senderEndpoint: pushEndpointRef.current || ''
+        })
+      }).catch(() => {});
+    } catch { showToast("⚠️ Errore di connessione"); }
+  };
+
+  const savePlant = async plant => {
+    try { await db.collection("plants").doc(plant.id).set(plant); }
+    catch { showToast("⚠️ Errore salvataggio"); }
+  };
+
+  const deletePlant = async id => {
+    try { await db.collection("plants").doc(id).delete(); }
+    catch { showToast("⚠️ Errore"); }
+  };
+
+  const saveSettings = async (u, s) => {
+    try { await db.collection("config").doc("settings").set({users: u, seasonal: s}, {merge: true}); }
+    catch { showToast("⚠️ Errore salvataggio"); }
+  };
+
+  const sorted = [...plants].sort((a, b) => sortBy === "urgency" ? urgencyRank(a) - urgencyRank(b) : a.name.localeCompare(b.name, "it"));
+  const todayPlants = plants.filter(p => urgency(p) === "today" || urgency(p) === "overdue");
+  const base = {fontFamily:"'DM Sans',sans-serif", background:t.bg, color:t.text,
+    minHeight:"100vh", maxWidth:430, margin:"0 auto", position:"relative", paddingBottom:80};
+
+  function Header({title, back, actions}) {
+    return <div style={{background:t.header, color:t.headerTxt, padding:"16px 20px",
+      display:"flex", alignItems:"center", gap:12, position:"sticky", top:0, zIndex:50}}>
+      {back && <button onClick={back} style={{background:"none", border:"none", color:t.headerTxt,
+        cursor:"pointer", fontSize:24, padding:"0 4px", lineHeight:1, opacity:0.85}}>‹</button>}
+      <span style={{fontFamily:"'Fraunces',serif", fontSize:20, fontWeight:600, flex:1}}>{title}</span>
+      {actions}
+    </div>;
+  }
+
+  if (loading) return (
+    <div style={{...base, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16}}>
+      <div style={{fontSize:56}}>🌿</div>
+      <p style={{fontFamily:"'Fraunces',serif", fontSize:24, fontWeight:600, color:t.text}}>Popoci Garden</p>
+      <div style={{width:32, height:32, border:`3px solid ${t.accent}40`, borderTopColor:t.accent,
+        borderRadius:"50%", animation:"spin 0.8s linear infinite"}}/>
+    </div>
+  );
+
+  // ── HOME ───────────────────────────────────────────────────────────────────
+  function HomeScreen() {
+    return <>
+      <div style={{background:t.header, padding:"14px 20px", display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+        <span style={{fontFamily:"'Fraunces',serif", color:t.headerTxt, fontSize:20, fontWeight:600}}>🌿 Popoci Garden</span>
+        <div style={{display:"flex", alignItems:"center", gap:10}}>
+          <span style={{color:t.headerTxt+"cc", fontSize:13}}>👤 {users[currentUser]}</span>
+          <div onClick={() => setThemeName(n => n === "light" ? "dark" : "light")}
+            style={{cursor:"pointer", width:44, height:24, borderRadius:12,
+              background:themeName === "dark" ? t.accent : t.headerTxt+"40",
+              position:"relative", transition:"background 0.3s", flexShrink:0}}>
+            <div style={{position:"absolute", top:3, left:themeName === "dark" ? 22 : 3,
+              width:18, height:18, borderRadius:9, background:"#fff",
+              transition:"left 0.25s", display:"flex", alignItems:"center", justifyContent:"center", fontSize:10}}>
+              {themeName === "dark" ? "🌙" : "☀️"}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{padding:"20px 16px", animation:"slideUp 0.3s ease"}}>
+        {plants.length === 0 && <div style={{textAlign:"center", padding:"60px 20px", color:t.sub}}>
+          <div style={{fontSize:56, marginBottom:16}}>🌱</div>
+          <p style={{fontFamily:"'Fraunces',serif", fontSize:20, marginBottom:8}}>Nessuna pianta ancora!</p>
+          <p style={{fontSize:14}}>Premi + per aggiungere la prima</p>
+        </div>}
+
+        {todayPlants.length > 0 && <>
+          <h2 style={{fontFamily:"'Fraunces',serif", fontSize:17, fontWeight:600, marginBottom:12}}>
+            💧 Da annaffiare oggi ({todayPlants.length})
+          </h2>
+          <div style={{display:"flex", gap:12, overflowX:"auto", paddingBottom:8, marginBottom:20, scrollbarWidth:"none"}}>
+            {todayPlants.map(p => {
+              const sl = statusLabel(p, t);
+              return <div key={p.id} onClick={() => {setSelId(p.id); setScreen("detail");}}
+                style={{flexShrink:0, width:140, background:t.card, borderRadius:16, overflow:"hidden",
+                  boxShadow:`0 3px 14px ${t.shadow}`, cursor:"pointer", border:`1.5px solid ${sl.color}40`}}>
+                <div style={{height:90, background:t.accentBg, display:"flex", alignItems:"center", justifyContent:"center"}}>
+                  <PlantIcon plant={p} size={66}/>
+                </div>
+                <div style={{padding:"10px 10px 12px"}}>
+                  <p style={{fontWeight:600, fontSize:13, marginBottom:4, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{p.name}</p>
+                  <Badge txt={sl.txt} color={sl.color} bg={sl.bg}/>
+                  <button onClick={e => {e.stopPropagation(); waterPlant(p.id);}}
+                    style={{width:"100%", marginTop:8, padding:"6px", border:"none", borderRadius:8,
+                      background:t.accent, color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:600, fontSize:12}}>
+                    💧 Ho annaffiato!
+                  </button>
+                </div>
+              </div>;
+            })}
+          </div>
+        </>}
+
+        {plants.length > 0 && <>
+          <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12}}>
+            <h2 style={{fontFamily:"'Fraunces',serif", fontSize:17, fontWeight:600}}>Tutte le piante</h2>
+            <div style={{display:"flex", gap:6}}>
+              {[["urgency","⚡ Urgenza"],["alpha","🔤 A-Z"]].map(([k,lbl]) =>
+                <button key={k} onClick={() => setSortBy(k)}
+                  style={{padding:"4px 10px", borderRadius:12, border:`1px solid ${t.border}`,
+                    background:sortBy===k ? t.accent : "none", color:sortBy===k ? "#fff" : t.sub,
+                    cursor:"pointer", fontFamily:"inherit", fontSize:11}}>
+                  {lbl}
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={{display:"flex", flexDirection:"column", gap:10}}>
+            {sorted.map(p => {
+              const sl = statusLabel(p, t);
+              return <div key={p.id} onClick={() => {setSelId(p.id); setScreen("detail");}}
+                style={{background:t.card, borderRadius:16, padding:"14px 16px",
+                  boxShadow:`0 2px 10px ${t.shadow}`, cursor:"pointer", display:"flex", gap:14,
+                  alignItems:"center", opacity:p.manualStatus==="dead" ? 0.55 : 1, border:`1px solid ${t.border}`}}>
+                <PlantIcon plant={p} size={56}/>
+                <div style={{flex:1, minWidth:0}}>
+                  <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:4}}>
+                    <span style={{fontWeight:600, fontSize:15, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{p.name}</span>
+                    {p.manualStatus==="sick" && <span>🤒</span>}
+                    {p.manualStatus==="dead" && <span>💀</span>}
+                  </div>
+                  <Badge txt={sl.txt} color={sl.color} bg={sl.bg}/>
+                  {p.location && <p style={{fontSize:11, color:t.sub, marginTop:4}}>📍 {p.location}</p>}
+                  {p.lastWateredByName && <p style={{fontSize:11, color:t.sub, marginTop:2}}>👤 {p.lastWateredByName} · {fmtS(p.lastWatered)}</p>}
+                </div>
+                {p.manualStatus!=="dead" && (urgency(p)==="today" || urgency(p)==="overdue") &&
+                  <button onClick={e => {e.stopPropagation(); waterPlant(p.id);}}
+                    style={{flexShrink:0, padding:"8px 10px", border:"none", borderRadius:12,
+                      background:t.accent, color:"#fff", cursor:"pointer", fontFamily:"inherit",
+                      fontWeight:600, fontSize:11, textAlign:"center", lineHeight:1.4}}>
+                    💧<br/>Annaffia
+                  </button>}
+              </div>;
+            })}
+          </div>
+        </>}
+      </div>
+    </>;
+  }
+
+  // ── DETAIL ─────────────────────────────────────────────────────────────────
+  function DetailScreen() {
+    const p = selectedPlant;
+    if (!p) return null;
+    const sl = statusLabel(p, t);
+    const dl = daysLeft(p);
+    const fileRef = useRef();
+    const iconRef = useRef();
+
+    const addPhoto = async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const url = await compressImage(file);
+      const newPhotos = [{id:uid(), url, date:new Date().toISOString()}, ...(p.photos || [])];
+      await db.collection("plants").doc(p.id).update({photos: newPhotos});
+      showToast("📸 Foto aggiunta!");
+    };
+
+    const setCustomImg = async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const url = await compressImage(file);
+      await db.collection("plants").doc(p.id).update({customImg: url});
+    };
+
+    return <>
+      <Header title={p.name} back={() => setScreen("home")}
+        actions={<button onClick={() => {setSelId(p.id); setScreen("edit");}}
+          style={{background:"none", border:"none", color:t.headerTxt, cursor:"pointer", fontSize:16, padding:"0 4px"}}>✏️</button>}/>
+      <div style={{animation:"slideUp 0.3s ease"}}>
+        <div style={{background:t.accentBg, padding:"32px 20px", textAlign:"center"}}>
+          <div style={{display:"inline-block", cursor:"pointer", position:"relative"}} onClick={() => iconRef.current?.click()}>
+            <PlantIcon plant={p} size={110}/>
+            <div style={{position:"absolute", bottom:-4, right:-4, background:t.accent, borderRadius:12,
+              padding:"3px 7px", fontSize:11, color:"#fff", fontWeight:500}}>📷</div>
+          </div>
+          <input ref={iconRef} type="file" accept="image/*" onChange={setCustomImg} style={{display:"none"}}/>
+          <p style={{fontSize:11, color:t.sub, marginTop:8}}>Tocca l'icona per impostare la foto</p>
+          <div style={{marginTop:8}}><Badge txt={sl.txt} color={sl.color} bg={sl.bg}/></div>
+          {p.location && <p style={{color:t.sub, fontSize:13, marginTop:6}}>📍 {p.location}</p>}
+        </div>
+
+        <div style={{padding:"16px"}}>
+          {p.manualStatus !== "dead" && <button onClick={() => waterPlant(p.id)}
+            style={{width:"100%", padding:"14px", borderRadius:14,
+              background:urgency(p)==="ok" ? "none" : t.accent,
+              color:urgency(p)==="ok" ? t.accent : "#fff",
+              border:urgency(p)==="ok" ? `1.5px solid ${t.accent}` : "none",
+              cursor:"pointer", fontFamily:"inherit", fontWeight:600, fontSize:16,
+              boxShadow:`0 4px 16px ${t.shadow}`, marginBottom:16}}>
+            💧 {urgency(p)==="ok" ? "Annaffia in anticipo" : "Ho annaffiato!"}
+          </button>}
+
+          <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14}}>
+            {[
+              {l:"Frequenza", v:`ogni ${p.freqDays} giorni`},
+              {l:"Prossima", v:p.manualStatus==="dead" ? "—" : dl<=0 ? "Oggi!" : dl===1 ? "Domani" : `Tra ${dl} gg`},
+              {l:"Ultima", v:fmtS(p.lastWatered)},
+              {l:"Da chi", v:p.lastWateredByName||"—"},
+              {l:"Aggiunta il", v:fmtS(p.created)},
+            ].map(({l, v}) => (
+              <div key={l} style={{background:t.card, borderRadius:12, padding:"12px 14px", border:`1px solid ${t.border}`}}>
+                <p style={{fontSize:11, color:t.sub, marginBottom:3}}>{l}</p>
+                <p style={{fontSize:14, fontWeight:600}}>{v}</p>
+              </div>
+            ))}
+          </div>
+
+          <div style={{background:t.card, borderRadius:14, padding:"14px 16px", border:`1px solid ${t.border}`, marginBottom:12}}>
+            <p style={{fontSize:13, fontWeight:500, marginBottom:10, color:t.sub}}>Stato della pianta</p>
+            <div style={{display:"flex", gap:8}}>
+              {[["active","🪴 Sana"],["sick","🤒 Malata"],["dead","💀 Morta"]].map(([s, lbl]) => (
+                <button key={s} onClick={() => db.collection("plants").doc(p.id).update({manualStatus: s})}
+                  style={{flex:1, padding:"8px 4px", borderRadius:10,
+                    border:`1.5px solid ${p.manualStatus===s ? t.accent : t.border}`,
+                    background:p.manualStatus===s ? t.accentBg : "none",
+                    color:p.manualStatus===s ? t.accentTxt : t.sub,
+                    cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:500}}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {p.notes && <div style={{background:t.card, borderRadius:14, padding:"14px 16px", border:`1px solid ${t.border}`, marginBottom:12}}>
+            <p style={{fontSize:12, color:t.sub, marginBottom:4}}>📝 Note</p>
+            <p style={{fontSize:14}}>{p.notes}</p>
+          </div>}
+
+          <div style={{background:t.card, borderRadius:14, padding:"14px 16px", border:`1px solid ${t.border}`, marginBottom:12}}>
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12}}>
+              <p style={{fontFamily:"'Fraunces',serif", fontSize:16, fontWeight:600}}>📸 Diario fotografico</p>
+              <button onClick={() => fileRef.current?.click()}
+                style={{padding:"6px 12px", borderRadius:10, border:`1px solid ${t.accent}`,
+                  background:"none", color:t.accent, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:500}}>
+                + Aggiungi
+              </button>
+              <input ref={fileRef} type="file" accept="image/*" onChange={addPhoto} style={{display:"none"}} capture="environment"/>
+            </div>
+            {!(p.photos && p.photos.length > 0)
+              ? <p style={{color:t.sub, fontSize:13, textAlign:"center", padding:"20px 0"}}>Nessuna foto ancora — scatta la prima! 🌱</p>
+              : <div style={{display:"flex", gap:8, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none"}}>
+                  {p.photos.map(ph => (
+                    <div key={ph.id} style={{flexShrink:0}}>
+                      <img src={ph.url} alt="" style={{width:90, height:90, objectFit:"cover", borderRadius:10}}/>
+                      <p style={{fontSize:10, color:t.sub, textAlign:"center", marginTop:2}}>{fmtS(ph.date)}</p>
+                    </div>
+                  ))}
+                </div>}
+          </div>
+
+          <div style={{background:t.card, borderRadius:14, padding:"14px 16px", border:`1px solid ${t.border}`, marginBottom:14}}>
+            <p style={{fontFamily:"'Fraunces',serif", fontSize:16, fontWeight:600, marginBottom:12}}>💧 Storico irrigazioni</p>
+            {!(p.history && p.history.length > 0)
+              ? <p style={{color:t.sub, fontSize:13, textAlign:"center", padding:"10px 0"}}>Nessuna irrigazione registrata</p>
+              : p.history.slice(0, 10).map((h, i) => (
+                  <div key={i} style={{display:"flex", justifyContent:"space-between", alignItems:"center",
+                    padding:"8px 0", borderBottom:i<Math.min(p.history.length,10)-1 ? `1px solid ${t.border}` : "none"}}>
+                    <span style={{fontSize:13}}>💧 {h.uname||"—"}</span>
+                    <span style={{fontSize:12, color:t.sub}}>{fmtS(h.date)}</span>
+                  </div>
+                ))}
+          </div>
+
+          <button onClick={async () => {await deletePlant(p.id); setScreen("home"); showToast("🗑️ Pianta rimossa");}}
+            style={{width:"100%", padding:"12px", border:`1px solid ${t.red}`, borderRadius:12,
+              background:"none", color:t.red, cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:500}}>
+            🗑️ Rimuovi pianta
+          </button>
+        </div>
+      </div>
+    </>;
+  }
+
+  // ── ADD/EDIT ────────────────────────────────────────────────────────────────
+  function AddEditScreen() {
+    const isEdit = screen === "edit" && selectedPlant;
+    const [form, setForm] = useState(isEdit ? {...selectedPlant} : {
+      id:uid(), name:"", emoji:"🌿", freqDays:7, lastWatered:"",
+      lastWateredBy:"", lastWateredByName:"", location:"", notes:"",
+      manualStatus:"active", photos:[], history:[], created:new Date().toISOString()
+    });
+    const [saving, setSaving] = useState(false);
+    const f = (k, v) => setForm(p => ({...p, [k]:v}));
+
+    const save = async () => {
+      if (!form.name.trim()) { showToast("⚠️ Inserisci il nome"); return; }
+      setSaving(true);
+      await savePlant(form);
+      setSaving(false);
+      setScreen("home");
+      showToast(isEdit ? "✅ Pianta aggiornata!" : "🌱 Pianta aggiunta!");
+    };
+
+    const inp = {width:"100%", padding:"10px 14px", borderRadius:10,
+      border:`1.5px solid ${t.inputBorder}`, background:t.inputBg, color:t.text, fontFamily:"inherit", fontSize:14};
+
+    return <>
+      <Header title={isEdit ? "Modifica pianta" : "Aggiungi pianta"} back={() => setScreen(isEdit ? "detail" : "home")}/>
+      <div style={{padding:"20px 16px", animation:"slideUp 0.3s ease"}}>
+        <div style={{background:t.card, borderRadius:14, padding:"16px", border:`1px solid ${t.border}`, marginBottom:18}}>
+          <p style={{fontSize:13, color:t.sub, marginBottom:10, fontWeight:500}}>Scegli un'emoji 🌿</p>
+          <div style={{fontSize:48, textAlign:"center", marginBottom:12}}>{form.emoji}</div>
+          <div style={{display:"flex", flexWrap:"wrap", gap:6, justifyContent:"center"}}>
+            {EMOJIS.map(e => (
+              <button key={e} onClick={() => f("emoji", e)}
+                style={{fontSize:22, background:form.emoji===e ? t.accentBg : "none",
+                  border:`1px solid ${form.emoji===e ? t.accent : t.border}`,
+                  borderRadius:8, padding:"4px 6px", cursor:"pointer"}}>
+                {e}
+              </button>
+            ))}
+          </div>
+          <p style={{fontSize:11, color:t.sub, marginTop:10, textAlign:"center"}}>
+            📷 Puoi aggiungere una foto dal dettaglio pianta
+          </p>
+        </div>
+
+        {[
+          {label:"Nome della pianta *", key:"name", type:"text", placeholder:"es. Ficus Benjamin"},
+          {label:"Frequenza irrigazione (giorni)", key:"freqDays", type:"number", placeholder:"7"},
+          {label:"Posizione", key:"location", type:"text", placeholder:"es. Balcone, Soggiorno..."},
+        ].map(({label, key, type, placeholder}) => (
+          <div key={key} style={{marginBottom:14}}>
+            <label style={{display:"block", fontSize:13, color:t.sub, marginBottom:5, fontWeight:500}}>{label}</label>
+            <input value={form[key]||""} type={type} placeholder={placeholder}
+              onChange={e => f(key, type==="number" ? Number(e.target.value) : e.target.value)}
+              style={inp}/>
+          </div>
+        ))}
+
+        <div style={{marginBottom:20}}>
+          <label style={{display:"block", fontSize:13, color:t.sub, marginBottom:5, fontWeight:500}}>Note</label>
+          <textarea value={form.notes||""} onChange={e => f("notes", e.target.value)}
+            placeholder="Informazioni utili..." rows={3} style={{...inp, resize:"vertical"}}/>
+        </div>
+
+        <button onClick={save} disabled={saving}
+          style={{width:"100%", padding:"14px", border:"none", borderRadius:14,
+            background:t.accent, color:"#fff", cursor:"pointer", fontFamily:"inherit",
+            fontWeight:600, fontSize:16, marginBottom:20, opacity:saving?0.7:1}}>
+          {saving ? "⏳ Salvataggio..." : isEdit ? "💾 Salva modifiche" : "🌱 Aggiungi pianta"}
+        </button>
+      </div>
+    </>;
+  }
+
+  // ── STATS ───────────────────────────────────────────────────────────────────
+  function StatsScreen() {
+    const active = plants.filter(p => p.manualStatus !== "dead");
+    const allHistory = plants.flatMap(p => (p.history||[]).map(h => ({...h, plant:p.name, emoji:p.emoji})));
+    allHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
+    const byMonth = {};
+    allHistory.forEach(h => {
+      const k = new Date(h.date).toLocaleDateString("it-IT", {month:"short", year:"2-digit"});
+      byMonth[k] = (byMonth[k]||0) + 1;
+    });
+    const monthData = Object.entries(byMonth).slice(-6).map(([k,v]) => ({k,v}));
+    const maxVal = Math.max(...monthData.map(d => d.v), 1);
+    const perPlant = plants.map(p => ({name:p.name.split(" ")[0], cnt:(p.history||[]).length, emoji:p.emoji}))
+      .sort((a,b) => b.cnt - a.cnt).slice(0, 5);
+
+    const sCard = (lbl, val, color) => (
+      <div style={{background:t.card, borderRadius:14, padding:"16px", border:`1px solid ${t.border}`, flex:1}}>
+        <p style={{fontSize:11, color:t.sub, marginBottom:4}}>{lbl}</p>
+        <p style={{fontSize:28, fontFamily:"'Fraunces',serif", fontWeight:700, color:color||t.text}}>{val}</p>
+      </div>
+    );
+
+    return <>
+      <Header title="📊 Statistiche"/>
+      <div style={{padding:"16px", animation:"slideUp 0.3s ease"}}>
+        <div style={{display:"flex", gap:10, marginBottom:12}}>
+          {sCard("Piante attive", active.length, t.green)}
+          {sCard("Perse", plants.filter(p=>p.manualStatus==="dead").length, t.red)}
+        </div>
+        <div style={{display:"flex", gap:10, marginBottom:20}}>
+          {sCard("Irrigazioni totali", allHistory.length, t.accent)}
+          {sCard("Ultimi 30 giorni", allHistory.filter(h=>daysSince(h.date)<30).length, t.amber)}
+        </div>
+        {monthData.length > 0 && <div style={{background:t.card, borderRadius:14, padding:"16px", border:`1px solid ${t.border}`, marginBottom:14}}>
+          <p style={{fontFamily:"'Fraunces',serif", fontWeight:600, marginBottom:16}}>Irrigazioni per mese</p>
+          <div style={{display:"flex", alignItems:"flex-end", gap:6, height:80}}>
+            {monthData.map(({k,v}) => (
+              <div key={k} style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4}}>
+                <span style={{fontSize:10, color:t.sub}}>{v}</span>
+                <div style={{width:"100%", borderRadius:"4px 4px 0 0", background:t.accent, height:`${Math.max((v/maxVal)*60,4)}px`}}/>
+                <span style={{fontSize:9, color:t.sub, textAlign:"center"}}>{k}</span>
+              </div>
+            ))}
+          </div>
+        </div>}
+        {perPlant.length > 0 && <div style={{background:t.card, borderRadius:14, padding:"16px", border:`1px solid ${t.border}`, marginBottom:14}}>
+          <p style={{fontFamily:"'Fraunces',serif", fontWeight:600, marginBottom:12}}>Top 5 piante annaffiate</p>
+          {perPlant.map((pl, i) => (
+            <div key={pl.name} style={{display:"flex", alignItems:"center", gap:10,
+              padding:"6px 0", borderBottom:i<perPlant.length-1 ? `1px solid ${t.border}` : "none"}}>
+              <span style={{fontSize:20}}>{pl.emoji}</span>
+              <span style={{flex:1, fontSize:14}}>{pl.name}</span>
+              <Badge txt={`${pl.cnt} 💧`} color={t.accentTxt} bg={t.accentBg}/>
+            </div>
+          ))}
+        </div>}
+        <div style={{background:t.card, borderRadius:14, padding:"16px", border:`1px solid ${t.border}`}}>
+          <p style={{fontFamily:"'Fraunces',serif", fontWeight:600, marginBottom:12}}>Ultime irrigazioni</p>
+          {allHistory.length === 0
+            ? <p style={{color:t.sub, fontSize:13, textAlign:"center", padding:"10px 0"}}>Nessuna irrigazione ancora!</p>
+            : allHistory.slice(0,15).map((h, i) => (
+                <div key={i} style={{display:"flex", justifyContent:"space-between", alignItems:"center",
+                  padding:"8px 0", borderBottom:i<Math.min(allHistory.length,15)-1 ? `1px solid ${t.border}` : "none"}}>
+                  <div>
+                    <span style={{fontSize:13, fontWeight:500}}>{h.emoji} {h.plant}</span>
+                    <p style={{fontSize:11, color:t.sub}}>{h.uname}</p>
+                  </div>
+                  <span style={{fontSize:12, color:t.sub}}>{fmtS(h.date)}</span>
+                </div>
+              ))}
+        </div>
+      </div>
+    </>;
+  }
+
+  // ── SETTINGS ────────────────────────────────────────────────────────────────
+  function SettingsScreen() {
+    const [u1, setU1] = useState(users.u1);
+    const [u2, setU2] = useState(users.u2);
+    const inp = {width:"100%", padding:"10px 14px", borderRadius:10, border:`1.5px solid ${t.inputBorder}`,
+      background:t.inputBg, color:t.text, fontFamily:"inherit", fontSize:14};
+
+    return <>
+      <Header title="⚙️ Impostazioni"/>
+      <div style={{padding:"20px 16px", animation:"slideUp 0.3s ease"}}>
+        <div style={{background:t.card, borderRadius:14, padding:"16px", border:`1px solid ${t.border}`, marginBottom:14}}>
+          <p style={{fontFamily:"'Fraunces',serif", fontWeight:600, marginBottom:14}}>👥 Utenti</p>
+          {[["u1",u1,setU1],["u2",u2,setU2]].map(([id,val,set],i) => (
+            <div key={id} style={{marginBottom:12}}>
+              <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:6}}>
+                <div style={{width:32, height:32, borderRadius:16, background:t.accentBg, display:"flex",
+                  alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:600, color:t.accentTxt}}>
+                  {val[0]?.toUpperCase()||"?"}
+                </div>
+                <span style={{fontSize:13, color:t.sub}}>Utente {i+1}</span>
+                {currentUser===id && <Badge txt="Sei tu" color={t.accentTxt} bg={t.accentBg}/>}
+              </div>
+              <input value={val} onChange={e => set(e.target.value)} style={inp}/>
+            </div>
+          ))}
+          <p style={{fontSize:13, color:t.sub, marginBottom:8, marginTop:4}}>Chi sta usando l'app adesso?</p>
+          <div style={{display:"flex", gap:8, marginBottom:10}}>
+            {[["u1",u1||"Giacomo"],["u2",u2||"Gino"]].map(([id,lbl]) => (
+              <button key={id} onClick={() => setCurrentUser(id)}
+                style={{flex:1, padding:"8px", borderRadius:10, border:`1.5px solid ${currentUser===id ? t.accent : t.border}`,
+                  background:currentUser===id ? t.accentBg : "none", color:currentUser===id ? t.accentTxt : t.sub,
+                  cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:500}}>
+                {currentUser===id ? "✓ " : ""}{lbl}
+              </button>
+            ))}
+          </div>
+          <button onClick={async () => {await saveSettings({u1,u2}, seasonal); showToast("✅ Nomi salvati!");}}
+            style={{width:"100%", padding:"10px", border:"none", borderRadius:10, background:t.accent,
+              color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:500}}>
+            Salva nomi
+          </button>
+        </div>
+
+        <div style={{background:t.card, borderRadius:14, padding:"16px", border:`1px solid ${t.border}`, marginBottom:14}}>
+          <p style={{fontFamily:"'Fraunces',serif", fontWeight:600, marginBottom:12}}>🎨 Tema</p>
+          <div style={{display:"flex", gap:8}}>
+            {[["light","☀️ Chiaro"],["dark","🌙 Scuro"]].map(([k,lbl]) => (
+              <button key={k} onClick={() => setThemeName(k)}
+                style={{flex:1, padding:"10px", borderRadius:10, border:`1.5px solid ${themeName===k ? t.accent : t.border}`,
+                  background:themeName===k ? t.accentBg : "none", color:themeName===k ? t.accentTxt : t.sub,
+                  cursor:"pointer", fontFamily:"inherit", fontWeight:500}}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{background:t.card, borderRadius:14, padding:"16px", border:`1px solid ${t.border}`, marginBottom:14}}>
+          <p style={{fontFamily:"'Fraunces',serif", fontWeight:600, marginBottom:4}}>🍂 Modalità stagionale</p>
+          <p style={{fontSize:13, color:t.sub, marginBottom:12}}>In inverno raddoppia il tempo tra le irrigazioni.</p>
+          <div style={{display:"flex", justifyContent:"space-between", alignItems:"center",
+            background:t.card2, borderRadius:10, padding:"10px 14px", marginBottom:8}}>
+            <span style={{fontSize:14}}>Stato attuale:</span>
+            <span style={{fontWeight:600, color:seasonal ? t.green : t.sub}}>{seasonal ? "✅ Attiva" : "⭕ Disattiva"}</span>
+          </div>
+          <button onClick={async () => {const ns=!seasonal; setSeasonal(ns); await saveSettings({u1,u2}, ns);}}
+            style={{width:"100%", padding:"10px", borderRadius:10,
+              border:`1.5px solid ${seasonal ? t.red : t.accent}`,
+              background:"none", color:seasonal ? t.red : t.accent,
+              cursor:"pointer", fontFamily:"inherit", fontWeight:500}}>
+            {seasonal ? "Disattiva modalità stagionale" : "Attiva modalità stagionale"}
+          </button>
+        </div>
+
+        <div style={{background:t.card, borderRadius:14, padding:"16px", border:`1px solid ${t.border}`}}>
+          <p style={{fontFamily:"'Fraunces',serif", fontWeight:600, marginBottom:4}}>🔔 Notifiche</p>
+          <p style={{fontSize:13, color:t.sub}}>Per ricevere le notifiche, installa l'app sul telefono: apri il menu del browser e tocca "Aggiungi a schermata Home".</p>
+        </div>
+      </div>
+    </>;
+  }
+
+  // ── NAV ─────────────────────────────────────────────────────────────────────
+  const NAV = [{id:"home",icon:"🏠",label:"Home"},{id:"stats",icon:"📊",label:"Statistiche"},{id:"settings",icon:"⚙️",label:"Impostazioni"}];
+
+  return (
+    <div style={base}>
+      {screen==="home" && <HomeScreen/>}
+      {screen==="detail" && <DetailScreen/>}
+      {(screen==="add"||screen==="edit") && <AddEditScreen/>}
+      {screen==="stats" && <StatsScreen/>}
+      {screen==="settings" && <SettingsScreen/>}
+
+      {(screen==="home"||screen==="stats"||screen==="settings") &&
+        <nav style={{position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)",
+          width:"100%", maxWidth:430, background:t.nav, borderTop:`1px solid ${t.navBorder}`,
+          display:"flex", alignItems:"center", padding:"6px 0 8px", zIndex:100}}>
+          {NAV.map(n => (
+            <button key={n.id} onClick={() => setScreen(n.id)}
+              style={{flex:1, background:"none", border:"none", cursor:"pointer", padding:"4px 0",
+                display:"flex", flexDirection:"column", alignItems:"center", gap:2}}>
+              <span style={{fontSize:22, filter:screen===n.id?"none":"grayscale(0.5) opacity(0.5)"}}>{n.icon}</span>
+              <span style={{fontSize:10, color:screen===n.id?t.accent:t.sub, fontFamily:"inherit", fontWeight:screen===n.id?600:400}}>
+                {n.label}
+              </span>
+            </button>
+          ))}
+          <div style={{position:"absolute", top:-24, left:"50%", transform:"translateX(-50%)"}}>
+            <button onClick={() => setScreen("add")}
+              style={{width:52, height:52, borderRadius:26, background:t.accent, border:"4px solid "+t.bg,
+                color:"#fff", fontSize:26, cursor:"pointer", display:"flex", alignItems:"center",
+                justifyContent:"center", boxShadow:`0 4px 16px ${t.shadow}`, lineHeight:1}}>+</button>
+          </div>
+        </nav>}
+
+      {toast && <div style={{position:"fixed", bottom:96, left:"50%", transform:"translateX(-50%)",
+        background:t.text, color:t.bg, padding:"10px 20px", borderRadius:24, fontSize:14,
+        fontWeight:500, fontFamily:"inherit", zIndex:200, whiteSpace:"nowrap",
+        animation:"toastIn 0.3s ease", boxShadow:`0 4px 20px ${t.shadow}`}}>{toast}</div>}
+
+      {notification && <div style={{position:"fixed", top:16, left:"50%", transform:"translateX(-50%)",
+        width:"calc(100% - 32px)", maxWidth:400, background:t.header, color:t.headerTxt,
+        padding:"12px 16px", borderRadius:14, fontSize:13, fontFamily:"inherit", zIndex:200,
+        animation:"toastIn 0.3s ease", boxShadow:`0 6px 24px ${t.shadow}`}}>
+        <p style={{fontWeight:600, marginBottom:2}}>🌿 Popoci Garden</p>
+        <p style={{opacity:0.85}}>{notification}</p>
+        <button onClick={() => setNotification(null)} style={{position:"absolute", top:10, right:12,
+          background:"none", border:"none", color:t.headerTxt, cursor:"pointer", fontSize:18, opacity:0.7}}>×</button>
+      </div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
